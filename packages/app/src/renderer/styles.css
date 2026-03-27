@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+:root {
+  -webkit-font-smoothing: antialiased;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  user-select: none;
+}
+
+.drag-region {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+/* All interactive elements must opt out of dragging */
+input, button, a, select, textarea, [role="button"] {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+mark {
+  background: transparent;
+  color: inherit;
+  font-weight: 600;
+}

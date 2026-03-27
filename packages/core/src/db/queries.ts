@@ -1,0 +1,298 @@
+import type Database from 'better-sqlite3'
+import type { Session, Message, FragmentResult, StatusInfo } from '../types.js'
+import { DB_PATH, getDBSize } from './db.js'
+
+export function getOrCreateProject(
+  db: Database.Database,
+  sourceId: number,
+  slug: string,
+  displayPath: string,
+  displayName: string,
+): number {
+  const existing = db
+    .prepare('SELECT id FROM projects WHERE source_id = ? AND slug = ?')
+    .get(sourceId, slug) as { id: number } | undefined
+
+  if (existing) return existing.id
+
+  const result = db
+    .prepare(
+      'INSERT INTO projects (source_id, slug, display_path, display_name) VALUES (?, ?, ?, ?)',
+    )
+    .run(sourceId, slug, displayPath, displayName)
+
+  return Number(result.lastInsertRowid)
+}
+
+export function getSourceId(db: Database.Database, name: 'claude' | 'codex'): number {
+  const row = db.prepare('SELECT id FROM sources WHERE name = ?').get(name) as
+    | { id: number }
+    | undefined
+  if (!row) throw new Error(`Source '${name}' not found in DB`)
+  return row.id
+}
+
+export function getSessionMtime(db: Database.Database, filePath: string): string | null {
+  const row = db
+    .prepare('SELECT raw_file_mtime FROM sessions WHERE file_path = ?')
+    .get(filePath) as { raw_file_mtime: string | null } | undefined
+  return row?.raw_file_mtime ?? null
+}
+
+export function upsertSession(
+  db: Database.Database,
+  opts: {
+    projectId: number
+    sourceId: number
+    sessionUuid: string
+    filePath: string
+    title: string
+    startedAt: string
+    endedAt: string
+    messageCount: number
+    hasToolUse: boolean
+    cwd: string
+    model: string
+    rawFileMtime: string
+  },
+): number {
+  const existing = db
+    .prepare('SELECT id FROM sessions WHERE session_uuid = ?')
+    .get(opts.sessionUuid) as { id: number } | undefined
+
+  if (existing) {
+    db.prepare('DELETE FROM messages WHERE session_id = ?').run(existing.id)
+    db.prepare(`
+      UPDATE sessions SET
+        title = ?, started_at = ?, ended_at = ?, message_count = ?,
+        has_tool_use = ?, cwd = ?, model = ?, raw_file_mtime = ?
+      WHERE id = ?
+    `).run(
+      opts.title, opts.startedAt, opts.endedAt, opts.messageCount,
+      opts.hasToolUse ? 1 : 0, opts.cwd, opts.model, opts.rawFileMtime,
+      existing.id,
+    )
+    return existing.id
+  }
+
+  const result = db.prepare(`
+    INSERT INTO sessions
+      (project_id, source_id, session_uuid, file_path, title,
+       started_at, ended_at, message_count, has_tool_use, cwd, model, raw_file_mtime)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    opts.projectId, opts.sourceId, opts.sessionUuid, opts.filePath, opts.title,
+    opts.startedAt, opts.endedAt, opts.messageCount, opts.hasToolUse ? 1 : 0,
+    opts.cwd, opts.model, opts.rawFileMtime,
+  )
+
+  return Number(result.lastInsertRowid)
+}
+
+export function insertMessages(
+  db: Database.Database,
+  sessionId: number,
+  sourceId: number,
+  messages: Array<{
+    uuid: string
+    parentUuid: string | null
+    role: string
+    contentText: string
+    timestamp: string
+    isSidechain: boolean
+    toolNames: string[]
+    seq: number
+  }>,
+): void {
+  const stmt = db.prepare(`
+    INSERT INTO messages
+      (session_id, source_id, msg_uuid, parent_uuid, role,
+       content_text, timestamp, is_sidechain, tool_names, seq)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+
+  for (const m of messages) {
+    stmt.run(
+      sessionId, sourceId, m.uuid, m.parentUuid, m.role,
+      m.contentText, m.timestamp, m.isSidechain ? 1 : 0,
+      JSON.stringify(m.toolNames), m.seq,
+    )
+  }
+}
+
+export function listRecentSessions(
+  db: Database.Database,
+  limit = 50,
+): Session[] {
+  return (db.prepare(`
+    SELECT
+      s.id, s.project_id AS projectId, s.source_id AS sourceId,
+      s.session_uuid AS sessionUuid, s.file_path AS filePath,
+      s.title, s.started_at AS startedAt, s.ended_at AS endedAt,
+      s.message_count AS messageCount, s.has_tool_use AS hasToolUse,
+      s.cwd, s.model,
+      src.name AS source,
+      p.display_path AS projectDisplayPath,
+      p.display_name AS projectDisplayName
+    FROM sessions s
+    JOIN sources src ON src.id = s.source_id
+    JOIN projects p ON p.id = s.project_id
+    ORDER BY s.started_at DESC
+    LIMIT ?
+  `).all(limit) as Array<Record<string, unknown>>).map(rowToSession)
+}
+
+export function getSessionWithMessages(
+  db: Database.Database,
+  sessionUuid: string,
+): { session: Session; messages: Message[] } | null {
+  const sessionRow = db.prepare(`
+    SELECT
+      s.id, s.project_id AS projectId, s.source_id AS sourceId,
+      s.session_uuid AS sessionUuid, s.file_path AS filePath,
+      s.title, s.started_at AS startedAt, s.ended_at AS endedAt,
+      s.message_count AS messageCount, s.has_tool_use AS hasToolUse,
+      s.cwd, s.model,
+      src.name AS source,
+      p.display_path AS projectDisplayPath,
+      p.display_name AS projectDisplayName
+    FROM sessions s
+    JOIN sources src ON src.id = s.source_id
+    JOIN projects p ON p.id = s.project_id
+    WHERE s.session_uuid = ?
+  `).get(sessionUuid) as Record<string, unknown> | undefined
+
+  if (!sessionRow) return null
+
+  const session = rowToSession(sessionRow)
+  const msgRows = db.prepare(`
+    SELECT id, session_id AS sessionId, msg_uuid AS msgUuid,
+           parent_uuid AS parentUuid, role, content_text AS contentText,
+           timestamp, is_sidechain AS isSidechain, tool_names AS toolNames, seq
+    FROM messages
+    WHERE session_id = ? AND is_sidechain = 0
+    ORDER BY seq
+  `).all(session.id) as Array<Record<string, unknown>>
+
+  const messages: Message[] = msgRows.map(r => ({
+    id: r['id'] as number,
+    sessionId: r['sessionId'] as number,
+    msgUuid: r['msgUuid'] as string | null,
+    parentUuid: r['parentUuid'] as string | null,
+    role: r['role'] as 'user' | 'assistant' | 'system',
+    contentText: r['contentText'] as string,
+    timestamp: r['timestamp'] as string,
+    isSidechain: Boolean(r['isSidechain']),
+    toolNames: JSON.parse(r['toolNames'] as string) as string[],
+    seq: r['seq'] as number,
+  }))
+
+  return { session, messages }
+}
+
+export function searchFragments(
+  db: Database.Database,
+  query: string,
+  opts: { limit?: number; source?: 'claude' | 'codex'; since?: string } = {},
+): FragmentResult[] {
+  const { limit = 10, source, since } = opts
+
+  const ftsQuery = query.includes('"') || query.includes('*') || query.includes(' OR ')
+    ? query
+    : `"${query.replace(/"/g, '""')}"`
+
+  const conditions: string[] = ['messages_fts MATCH ?', 'm.is_sidechain = 0']
+  const params: (string | number)[] = [ftsQuery]
+
+  if (source) {
+    conditions.push('src2.name = ?')
+    params.push(source)
+  }
+  if (since) {
+    conditions.push('m.timestamp >= ?')
+    params.push(since)
+  }
+  params.push(limit)
+
+  const sql = `
+    SELECT
+      rank,
+      m.role        AS messageRole,
+      m.timestamp   AS messageTimestamp,
+      sess.id       AS sessionId,
+      sess.session_uuid AS sessionUuid,
+      sess.title    AS sessionTitle,
+      sess.started_at AS startedAt,
+      p.display_path AS project,
+      src2.name     AS source,
+      snippet(messages_fts, -1, '<mark>', '</mark>', '…', 20) AS snippet
+    FROM messages_fts
+    JOIN messages m ON m.id = messages_fts.rowid
+    JOIN sessions sess ON sess.id = m.session_id
+    JOIN projects p ON p.id = sess.project_id
+    JOIN sources src2 ON src2.id = sess.source_id
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY rank
+    LIMIT ?
+  `
+
+  return (db.prepare(sql).all(...params) as Array<Record<string, unknown>>).map(
+    (row, i) => ({
+      rank: i + 1,
+      sessionId: row['sessionId'] as number,
+      sessionUuid: row['sessionUuid'] as string,
+      sessionTitle: (row['sessionTitle'] as string | null) ?? '(no title)',
+      source: row['source'] as 'claude' | 'codex',
+      project: row['project'] as string,
+      startedAt: row['startedAt'] as string,
+      snippet: row['snippet'] as string,
+      messageRole: row['messageRole'] as string,
+      messageTimestamp: row['messageTimestamp'] as string,
+    }),
+  )
+}
+
+export function getStatus(db: Database.Database): StatusInfo {
+  const counts = db.prepare(`
+    SELECT src.name, COUNT(*) AS cnt
+    FROM sessions s JOIN sources src ON src.id = s.source_id
+    GROUP BY src.name
+  `).all() as Array<{ name: string; cnt: number }>
+
+  const lastSync = db.prepare(`
+    SELECT MAX(synced_at) AS last FROM sync_log WHERE status = 'ok'
+  `).get() as { last: string | null }
+
+  const totalSessions = counts.reduce((sum, r) => sum + r.cnt, 0)
+  const claudeRow = counts.find(r => r.name === 'claude')
+  const codexRow = counts.find(r => r.name === 'codex')
+
+  return {
+    dbPath: DB_PATH,
+    totalSessions,
+    claudeSessions: claudeRow?.cnt ?? 0,
+    codexSessions: codexRow?.cnt ?? 0,
+    lastSyncedAt: lastSync?.last ?? null,
+    dbSizeBytes: getDBSize(),
+  }
+}
+
+function rowToSession(r: Record<string, unknown>): Session {
+  return {
+    id: r['id'] as number,
+    projectId: r['projectId'] as number,
+    sourceId: r['sourceId'] as number,
+    sessionUuid: r['sessionUuid'] as string,
+    filePath: r['filePath'] as string,
+    title: r['title'] as string | null,
+    startedAt: r['startedAt'] as string,
+    endedAt: r['endedAt'] as string,
+    messageCount: r['messageCount'] as number,
+    hasToolUse: Boolean(r['hasToolUse']),
+    cwd: r['cwd'] as string | null,
+    model: r['model'] as string | null,
+    source: r['source'] as 'claude' | 'codex',
+    projectDisplayPath: r['projectDisplayPath'] as string,
+    projectDisplayName: r['projectDisplayName'] as string,
+  }
+}

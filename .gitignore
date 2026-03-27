@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+out/
+packages/*/dist/
+packages/*/out/
+packages/app/out/
+packages/cli/bin/
+
+# Electron build
+dist-electron/
+
+# Turbo cache
+.turbo/
+
+# Source maps
+*.js.map
+*.d.ts.map
+
+# OS
+.DS_Store
+
+# Local env
+.env
+.env.local
+
+# Spool DB (user data, not committed)
+.spool/
+
+# Browse tool session state
+.gstack/
+
+# Native binaries (rebuilt per-platform via electron-rebuild)
+build/
+*.node
+
+# Compiled artifacts that may end up in src/ by mistake
+packages/*/src/**/*.js
+packages/*/src/**/*.d.ts
+packages/*/src/**/*.js.map
+packages/*/src/**/*.d.ts.map

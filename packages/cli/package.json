@@ -1,0 +1,27 @@
+{
+  "name": "@spool/cli",
+  "version": "0.0.1",
+  "private": false,
+  "type": "module",
+  "bin": {
+    "spool": "./bin/spool.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc && chmod +x bin/spool.js",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@spool/core": "workspace:*",
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3"
+  }
+}

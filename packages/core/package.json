@@ -1,0 +1,29 @@
+{
+  "name": "@spool/core",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "chokidar": "^4.0.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.15.3",
+    "vitest": "^3.1.2"
+  }
+}
