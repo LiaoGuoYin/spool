@@ -78,6 +78,29 @@ function cachedResolve(name: string, extras: string[] = []): string | null {
   return resolvedPaths[name]
 }
 
+/**
+ * Get the full environment from the user's login shell.
+ * In GUI-launched Electron apps, process.env is minimal (no PATH, SHELL, etc.).
+ * This ensures subprocesses get the same environment as a terminal session.
+ */
+let _loginShellEnv: Record<string, string> | null = null
+function getLoginShellEnv(): Record<string, string> {
+  if (_loginShellEnv) return _loginShellEnv
+  const shells = [process.env['SHELL'] ?? 'zsh', 'bash']
+  for (const sh of shells) {
+    try {
+      const raw = execSync(`${sh} -lic "env"`, { encoding: 'utf8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+      const env: Record<string, string> = {}
+      for (const line of raw.split('\n')) {
+        const idx = line.indexOf('=')
+        if (idx > 0) env[line.slice(0, idx)] = line.slice(idx + 1)
+      }
+      if (env['PATH']) { _loginShellEnv = env; return env }
+    } catch {}
+  }
+  return {}
+}
+
 interface AgentConfig {
   name: string
   bin: string
@@ -160,10 +183,13 @@ export class AcpManager {
     const nodePath = cachedResolve('node')
     if (!nodePath) throw new Error('Could not find Node.js. Ensure node is installed and in PATH.')
     const config = AGENT_CONFIGS[agentId]
+    const shellEnv = getLoginShellEnv()
     const agentEnv = {
       ...process.env as Record<string, string>,
+      ...shellEnv,
       ...config?.envSetup?.() ?? {},
     }
+
     const proc = spawn(nodePath, [agentBin], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: agentEnv,
@@ -355,7 +381,12 @@ export class AcpManager {
     for (const root of roots) {
       for (const entry of entryPoints) {
         const candidate = join(root, entry)
-        if (existsSync(candidate)) return candidate
+        if (existsSync(candidate)) {
+          // In packaged Electron apps, existsSync works with app.asar paths
+          // via Electron's patched fs, but spawning a subprocess with system
+          // Node requires the real unpacked path on disk.
+          return candidate.replace('app.asar', 'app.asar.unpacked')
+        }
       }
     }
     throw new Error(`Could not find ${pkg}. Run: pnpm add ${pkg}`)
