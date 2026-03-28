@@ -31,10 +31,16 @@ export default function OnboardingFlow({ onClose, onComplete }: Props) {
       else if (!status.cliInstalled && step === 'install') {
         setVerifyError('OpenCLI not found. Install it first, then click Verify.')
       }
-      if (status.browserBridgeReady && step === 'bridge') {
-        setStep('done')
-      } else if (step === 'bridge' && !status.browserBridgeReady) {
-        setBridgeError('Browser Bridge not detected. Make sure the Chrome extension is installed and Chrome is running.')
+      if (step === 'bridge') {
+        if (!status.browserBridgeReady) {
+          setBridgeError('Browser Bridge not detected. Make sure the Chrome extension is installed and Chrome is running.')
+        } else if (!status.connectivityOk) {
+          setBridgeError(status.connectivityError
+            ? `Bridge connected but connectivity check failed: ${status.connectivityError}`
+            : 'Bridge connected but connectivity check failed. Try restarting Chrome and the OpenCLI daemon.')
+        } else {
+          setStep('done')
+        }
       }
     } catch (err) {
       if (step === 'install') {

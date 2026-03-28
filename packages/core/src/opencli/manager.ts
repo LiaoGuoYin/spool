@@ -34,6 +34,8 @@ export class OpenCLIManager {
       cliInstalled: false,
       cliVersion: null,
       browserBridgeReady: false,
+      connectivityOk: false,
+      connectivityError: null,
       chromeRunning: false,
     }
 
@@ -48,11 +50,15 @@ export class OpenCLIManager {
       result.cliVersion = version.trim()
     } catch {}
 
-    // Check browser bridge status via `opencli doctor`
+    // Check browser bridge & connectivity via `opencli doctor`
     try {
-      const bridgeOutput = await this.exec(['doctor'], 10000)
-      // Match "[OK] Extension" specifically — not just any [OK] + any "extension"
-      result.browserBridgeReady = /\[ok]\s*extension/i.test(bridgeOutput)
+      const doctorOutput = await this.exec(['doctor'], 10000)
+      result.browserBridgeReady = /\[ok]\s*extension/i.test(doctorOutput)
+      result.connectivityOk = /\[ok]\s*connectivity/i.test(doctorOutput)
+      if (!result.connectivityOk) {
+        const match = doctorOutput.match(/\[fail]\s*connectivity[:\s]*(?:failed\s*)?[(\s]*(.+?)\)?$/im)
+        result.connectivityError = match?.[1]?.trim() ?? null
+      }
     } catch {}
 
     // Check if Chrome is running
