@@ -9,6 +9,7 @@ import AiAnswerCard from './components/AiAnswerCard.js'
 import OnboardingFlow from './components/OnboardingFlow.js'
 import SourcesPanel from './components/SourcesPanel.js'
 import CaptureUrlModal from './components/CaptureUrlModal.js'
+import SettingsPanel from './components/SettingsPanel.js'
 
 type View = 'search' | 'session'
 
@@ -43,6 +44,7 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [showSourcesPanel, setShowSourcesPanel] = useState(false)
   const [showCaptureModal, setShowCaptureModal] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
   const [captureSources, setCaptureSources] = useState<Array<{ label: string; count: number }>>([])
 
 
@@ -330,6 +332,8 @@ export default function App() {
         syncStatus={syncStatus}
         searchMode={searchMode}
         aiAgent={activeAgentName}
+        onSourcesClick={() => setShowSourcesPanel(true)}
+        onSettingsClick={() => setShowSettings(true)}
       />
 
       {/* Modals */}
@@ -351,6 +355,9 @@ export default function App() {
           onClose={() => setShowCaptureModal(false)}
           onCaptured={handleCaptured}
         />
+      )}
+      {showSettings && (
+        <SettingsPanel onClose={() => setShowSettings(false)} />
       )}
     </div>
   )
