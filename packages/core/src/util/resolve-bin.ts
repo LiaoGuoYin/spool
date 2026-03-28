@@ -1,6 +1,7 @@
 import { execSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { join } from 'node:path'
 
 /**
  * Resolve a binary path that works in both terminal-launched and
@@ -8,6 +9,18 @@ import { homedir } from 'node:os'
  *
  * Strategy: try `which` first, then login shell, then well-known paths.
  */
+function nvmVersionBins(home: string, name: string): string[] {
+  const versionsDir = join(home, '.nvm', 'versions', 'node')
+  try {
+    return readdirSync(versionsDir)
+      .filter(d => d.startsWith('v'))
+      .sort().reverse()
+      .map(d => join(versionsDir, d, 'bin', name))
+  } catch {
+    return []
+  }
+}
+
 export function resolveSystemBinary(name: string, extraSearchPaths: string[] = []): string | null {
   // Try shell lookup first
   try {
@@ -29,6 +42,7 @@ export function resolveSystemBinary(name: string, extraSearchPaths: string[] = [
     `/opt/homebrew/bin/${name}`,
     `${home}/.local/bin/${name}`,
     `${home}/.nvm/current/bin/${name}`,
+    ...nvmVersionBins(home, name),
   ]
   for (const p of searchPaths) {
     if (existsSync(p)) return p

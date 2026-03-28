@@ -1,5 +1,7 @@
 import { spawn, execSync } from 'node:child_process'
+import { readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { join } from 'node:path'
 import type Database from 'better-sqlite3'
 import type { OpenCLISetupStatus, PlatformInfo, CapturedItem } from '../types.js'
 import { cachedResolve, clearResolveCache } from '../util/resolve-bin.js'
@@ -212,20 +214,45 @@ export class OpenCLIManager {
     if (this._fullPath) return this._fullPath
     const base = process.env['PATH'] ?? ''
     const home = homedir()
+
+    // Try user's login shell for full PATH (zsh first — macOS default, then bash)
+    const shells = [
+      process.env['SHELL'] ?? 'zsh',
+      'bash',
+    ]
+    for (const sh of shells) {
+      try {
+        const shellPath = execSync(`${sh} -lc "echo \\$PATH"`, { encoding: 'utf8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+        if (shellPath && shellPath !== base) {
+          this._fullPath = shellPath
+          return shellPath
+        }
+      } catch {}
+    }
+
+    // Fallback: well-known paths + nvm version dirs
+    const nvmBins = this.nvmVersionBins(home)
     const extras = [
       '/opt/homebrew/bin',
       '/usr/local/bin',
       `${home}/.local/bin`,
       `${home}/.nvm/current/bin`,
+      ...nvmBins,
     ]
-    // Try to get full PATH from login shell
-    try {
-      const shellPath = execSync('bash -lc "echo $PATH"', { encoding: 'utf8', timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'] }).trim()
-      this._fullPath = shellPath
-      return shellPath
-    } catch {}
     this._fullPath = [...extras, base].join(':')
     return this._fullPath
+  }
+
+  private nvmVersionBins(home: string): string[] {
+    const versionsDir = join(home, '.nvm', 'versions', 'node')
+    try {
+      return readdirSync(versionsDir)
+        .filter(d => d.startsWith('v'))
+        .sort().reverse()
+        .map(d => join(versionsDir, d, 'bin'))
+    } catch {
+      return []
+    }
   }
 
   private exec(args: string[], timeout = 30000): Promise<string> {
