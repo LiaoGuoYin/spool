@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build core
+        run: pnpm --filter @spool/core build
+
+      - name: Build app (arm64 DMG)
+        run: pnpm --filter @spool/app build
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Get version
+        id: version
+        run: echo "version=$(jq -r .version packages/app/package.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Find DMG
+        id: dmg
+        run: |
+          DMG=$(find packages/app/dist -name "*.dmg" ! -name "*.blockmap" | head -1)
+          FINAL="packages/app/dist/Spool-${{ steps.version.outputs.version }}-arm64.dmg"
+          mv "$DMG" "$FINAL"
+          echo "path=$FINAL" >> "$GITHUB_OUTPUT"
+          echo "name=Spool-${{ steps.version.outputs.version }}-arm64.dmg" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          PREV_TAG=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || echo "")
+          if [[ -n "$PREV_TAG" ]]; then
+            COMMITS=$(git log "$PREV_TAG".."$TAG" --pretty=format:"- %s" --no-merges | grep -v "^- release:")
+          else
+            COMMITS=$(git log "$TAG" --pretty=format:"- %s" --no-merges -20 | grep -v "^- release:")
+          fi
+          EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+          echo "notes<<$EOF" >> "$GITHUB_OUTPUT"
+          echo "$COMMITS" >> "$GITHUB_OUTPUT"
+          echo "$EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to existing release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          # Upload asset to existing release, or create one if missing
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${{ steps.dmg.outputs.path }}" --clobber
+          else
+            gh release create "$TAG" "${{ steps.dmg.outputs.path }}" \
+              --title "Spool ${{ steps.version.outputs.version }}" \
+              --notes "## What's new
+
+          ${{ steps.notes.outputs.notes }}
+
+          ## Install
+
+          Download **${{ steps.dmg.outputs.name }}** and drag Spool to your Applications folder.
+          Requires macOS on Apple Silicon (M1+).
+
+          > This is an early release — feedback and bug reports welcome via [Issues](https://github.com/spool-lab/spool/issues)."
+          fi
